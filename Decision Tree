@@ -1,0 +1,221 @@
+#coding utf-8
+import xgboost
+import numpy as np
+from PIL import Image, ImageDraw 
+
+class _Node:
+
+    def __init__(self):
+
+        self.left = None
+        self.right = None
+        self.feature = None
+        self.threshold = None
+        self.label = None
+        self.numdata = None
+        self.gini_index = None
+        self.mse_index = None
+
+    def build_classify(self, data, target):
+        self.numdata = data.shape[0]
+        num_features = data.shape[1]
+        if len(np.unique(target)) == 1:
+            self.label = target[0]
+            return
+
+        class_cnt = {i: len(target[target==i]) for i in np.unique(target)}
+        self.label= max(class_cnt.items(), key=lambda x:x[1])[0]
+
+        best_gini_index = 0.0 
+        best_feature = None
+        best_threshold = None
+
+        gini = self._gini_func(target)
+
+        for f in range(num_features):
+
+            data_f = np.unique(data[:, f])
+            points = (data_f[:-1] + data_f[1:]) / 2.0
+
+            for threshold in points:
+
+                target_l = target[data[:, f] <  threshold]
+                target_r = target[data[:, f] >= threshold]
+
+                gini_l = self._gini_func(target_l)
+                gini_r = self._gini_func(target_r)
+                pl = float(target_l.shape[0]) / self.numdata
+                pr = float(target_r.shape[0]) / self.numdata
+                gini_index = gini - (pl * gini_l + pr * gini_r)
+
+                if gini_index > best_gini_index:
+                    best_gini_index = gini_index
+                    best_feature = f
+                    best_threshold = threshold
+
+        if best_gini_index == 0:
+            return
+
+        self.feature = best_feature
+        self.gini_index = best_gini_index
+        self.threshold = best_threshold
+
+        data_l   =   data[data[:, self.feature] <  self.threshold]
+        target_l = target[data[:, self.feature] <  self.threshold]
+        self.left = _Node()
+        self.left.build_classify(data_l, target_l)
+
+        data_r   =   data[data[:, self.feature] >= self.threshold]
+        target_r = target[data[:, self.feature] >= self.threshold]
+        self.right = _Node()
+        self.right.build_classify(data_r, target_r)
+
+
+    def build_regress(self, data, target):
+        self.numdata = data.shape[0]
+        num_features = data.shape[1]
+        if len(np.unique(target)) == 1:
+            self.label = target[0]
+            return
+
+        class_cnt = {i: len(target[target==i]) for i in np.unique(target)}
+        self.label= max(class_cnt.items(), key=lambda x:x[1])[0]
+
+        best_mse = 0.0 
+        best_feature = None
+        best_threshold = None
+
+        mse = self._mean_squared_error(target)
+
+        for f in range(num_features):
+
+            data_f = np.unique(data[:, f])
+            points = (data_f[:-1] + data_f[1:]) / 2.0
+
+            for threshold in points:
+
+                target_l = target[data[:, f] <  threshold]
+                target_r = target[data[:, f] >= threshold]
+
+                mse_l = self._mean_squared_error(target_l)
+                mse_r = self._mean_squared_error(target_r)
+                pl = float(target_l.shape[0]) / self.numdata
+                pr = float(target_r.shape[0]) / self.numdata
+                mse_index = mse - (pl * mse_l + pr * mse_r)
+
+                if mse_index > best_mse_index:
+                    best_mse_index = mse_index
+                    best_feature = f
+                    best_threshold = threshold
+
+        if best_mse_index == 0:
+            return
+
+        self.feature = best_feature
+        self.mse_index = best_mse_index
+        self.threshold = best_threshold
+
+        data_l   =   data[data[:, self.feature] <  self.threshold]
+        target_l = target[data[:, self.feature] <  self.threshold]
+        self.left = _Node()
+        self.left.build_regress(data_l, target_l)
+
+        data_r   =   data[data[:, self.feature] >= self.threshold]
+        target_r = target[data[:, self.feature] >= self.threshold]
+        self.right = _Node()
+        self.right.build_regress(data_r, target_r)
+
+    def _gini_func(self, target):
+        classes = np.unique(target)
+        numdata = target.shape[0]
+
+        gini = 1.0
+        for c in classes:
+            gini -= (len(target[target == c]) / numdata) ** 2.0
+        return gini
+
+    def _mean_squared_error(self, target):
+        y_hat = np.mean(target)
+        return np.mean((target - y_hat) ** 2.0) 
+
+    def prune(self, criterion, numall ,mode):
+        if mode == "classify":
+            if self.feature == None:
+                return
+
+            self.left.prune(criterion, numall ,mode)
+            self.right.prune(criterion, numall ,mode)
+            if self.left.feature == None and self.right.feature == None:
+
+                result = self.gini_index * float(self.numdata) / numall
+
+                if result < criterion:
+                    self.feature = None
+                    self.left = None
+                    self.right = None
+
+        if mode == "regress":
+            if self.feature == None:
+                return
+
+            self.left.prune(criterion, numall ,mode)
+            self.right.prune(criterion, numall ,mode)
+            if self.left.feature == None and self.right.feature == None:
+
+                result = self.mse_index * float(self.numdata) / numall
+
+                if result < criterion:
+                    self.feature = None
+                    self.left = None
+                    self.right = None
+
+    def predict(self, d):
+        if self.feature != None:
+            if d[self.feature] < self.threshold:
+                return self.left.predict(d)
+            else:
+                return self.right.predict(d)
+        else:
+            return self.label
+
+
+
+    def print_tree(self, depth, TF):
+
+        head = "    " * depth + TF + " -> "
+
+        if self.feature != None:
+            print(head + str(self.feature) + " < " + str(self.threshold) + "?")
+            self.left.print_tree(depth + 1, "T")
+            self.right.print_tree(depth + 1, "F")
+
+        else:
+            print(head + "{" + str(self.label) + ": " + str(self.numdata) + "}")
+            
+class Decision_Tree:
+    def __init__(self, criterion=0.1):
+        self.root = None
+        self.criterion = criterion
+
+    def fit(self, data, target, mode=None):
+        if mode == "classify":
+            self.root = _Node()
+            self.root.build_classify(data, target)
+            self.root.prune(self.criterion, self.root.numdata ,mode)
+            pass
+
+        elif mode == "regress":
+            self.root = _Node()
+            self.root.build_regress(data, target)
+            self.root.prune(self.criterion, self.root.numdata ,mode)
+            pass
+
+        else:
+            print("set mode classify or regress")
+
+    def predict(self, data):
+        ans = self.root.predict(data)
+        return ans
+
+    def print_tree(self):
+    	self.root.print_tree(0, " ")
